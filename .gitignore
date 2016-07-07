@@ -4,3 +4,9 @@ lib/whited.c
 lib/build/temp.linux-x86_64-2.6/whited.o
 
 lib/whited.so
+
+lib/build/temp.linux-x86_64-2.6/ptbd_util.o
+
+lib/ptbd_util.c
+
+lib/ptbd_util.so

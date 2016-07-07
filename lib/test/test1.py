@@ -1,6 +1,6 @@
 import whited
 
-c = whited.CATALOG("10051", 1000000)
+c = whited.CATALOG("10051", "20M")
 print c.db.journals()
 c.db.sync()
 c.close()

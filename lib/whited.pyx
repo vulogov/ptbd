@@ -2,6 +2,7 @@ import wgdb
 import types
 import time
 import os
+import ptbd_util
 
 __version__="0.1"
 __author__="Vladimir Ulogov"
@@ -152,11 +153,21 @@ class DB:
         try:
             self.db = wgdb.attach_existing_database(self.ID())
             self.ready = True
-        except KeyboardInterrupt:
+        except:
             if not self.kw.has_key("size"):
                 raise DBError(self, "Request for a new database %s but no size provided"%self.ID())
+            if type(self.kw["size"]) == types.IntType:
+                self.size = self.kw["size"]
+            elif type(self.kw["size"]) == types.StringType:
+                try:
+                    self.size = int(self.kw["size"])
+                except:
+                    try:
+                        self.size = ptbd_util.human2bytes(self.kw["size"])
+                    except:
+                        raise DBError(self, "Request for a new database %s but size have incorrect format" % self.ID())
             try:
-                self.db = wgdb.attach_database(shmname=self.ID(), size=self.kw["size"])
+                self.db = wgdb.attach_database(shmname=self.ID(), size=self.size)
                 self.ready = True
             except:
                 raise DBError(self, "Error creating memory segment with key: %s size %d"%(self.ID(), self.kw["size"]))
