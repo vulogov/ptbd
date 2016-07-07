@@ -330,6 +330,19 @@ class CATALOG:
     def __init__(self, id, size):
         self.db = DB(("id", True, ""),("name", True, ""), ("schema", False, "[]"), id=id, size=size, restore=True)
         self.db.journal()
+    def has_key(self, name):
+        q = self.db.query((1, wgdb.COND_EQUAL, name))
+        if not q:
+            return False
+        else:
+            r = q.next()
+            if not r:
+                return False
+        return True
+    def add(self, name, *schema):
+        if self.has_key(name):
+            return True
+        db = DB()
     def close(self):
         self.db.close()
 
