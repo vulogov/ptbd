@@ -3,6 +3,9 @@ import types
 import time
 import os
 import ptbd_util
+import simplejson
+
+
 
 __version__="0.1"
 __author__="Vladimir Ulogov"
@@ -32,7 +35,7 @@ class RECORD:
             raise StopIteration()
         self.db = db
         self.rec = rec
-    def __getattr__(self, key):
+    def __getitem__(self, key):
         if key not in self.db.attrs.keys():
             raise KeyError,key
         try:
@@ -40,9 +43,9 @@ class RECORD:
             res = wgdb.get_field(self.db, self.rec, self.db.attrs[key])
             self.db.commit()
             return res
-        except:
+        except KeyboardInterrupt:
             raise DBError(self.db, "Can not read %s[%s]"%(self.db.ID(),key))
-    def __setattr__(self, key, value):
+    def __setitem__(self, key, value):
         if key not in self.db.attrs.keys():
             raise KeyError,key
         try:
@@ -54,10 +57,12 @@ class RECORD:
             raise DBError(self.db, "Can not set %s[%s]" % (self.db.ID(), key))
     def delete(self):
         try:
+            print "Boo",self.dv.ID()
             self.db.begin(True)
             wgdb.delete_record(self.db, self.rec)
             self.db.commit()
         except:
+            self.db.commit()
             raise DBError(self.db, "Can not delete in %s" % self.db.ID())
 
 
@@ -79,7 +84,9 @@ class CURSOR:
             self.rec = wgdb.get_next_record(self.db, self.rec)
             self.db.commit()
         except:
+            self.db.commit()
             self.rec = None
+            raise StopIteration()
         return rec
 
 class QUERY(CURSOR):
@@ -90,13 +97,16 @@ class QUERY(CURSOR):
         if self.rec != None:
             rec = RECORD(self.db, self.rec)
         else:
+            wgdb.free_qauery(self.db, self.q)
             raise StopIteration()
         try:
             self.db.begin()
             self.rec = wgdb.fetch(self.db, self.rec)
             self.db.commit()
-        except:
+        except KeyboardInterrupt:
             self.rec = None
+            wgdb.free_query(self.db.db, self.q)
+        print "MMM",rec
         return rec
 
 
@@ -178,11 +188,16 @@ class DB:
         c = 0
         for i in self.schema:
             if i[1] == True:
+                self.begin()
                 idx = wgdb.indexid(self.db, c)
+                self.commit()
                 if idx != -1:
                     continue
                 try:
-                    if not wgdb.createindex(self.db, c):
+                    self.begin(True)
+                    res = wgdb.createindex(self.db, c)
+                    self.commit()
+                    if not res:
                         raise DBError(self)
                 except:
                     raise DBError(self, "Error creating index for %s[%d]"%(self.ID(),c))
@@ -199,6 +214,7 @@ class DB:
     def close(self):
         if not self.ready:
             return False
+        self.commit()
         self.journal()
         try:
             wgdb.detach_database(self.db)
@@ -247,6 +263,7 @@ class DB:
             rec = wgdb.get_first_record(self.db)
             self.commit()
         except:
+            self.commit()
             raise DBError(self, "Can not position at the first record in %s"%self.ID())
         return CURSOR(self, rec)
     def query(self, *qargs):
@@ -257,10 +274,12 @@ class DB:
             self.begin()
             rec = wgdb.fetch(self.db, q)
             self.commit()
-            return QUERY(self.db, rec, q)
+            print 44,rec
+            return QUERY(self, rec, q)
         except:
+            self.commit()
             return None
-    def begin(self, _write=True):
+    def begin(self, _write=False):
         if not self.ready:
             raise DBError(self, "Database %s not ready" % self.ID())
         if self.is_read != 0 or self.is_write != 0:
@@ -339,10 +358,32 @@ class CATALOG:
             if not r:
                 return False
         return True
-    def add(self, name, *schema):
-        if self.has_key(name):
+    def has_name(self, name):
+        q = self.db.query((1, wgdb.COND_EQUAL, name))
+        print "Q",q
+        if not q:
+            return None
+        else:
+            r = q.next()
+            if not r:
+                return None
+        return r
+    def search_for_id(self):
+        try:
+            c = self.db.first()
+        except:
+            return str(int(self.db.ID())+1)
+        for r in c.next():
+            print r
+    def add(self, name, size, *schema):
+        rec = self.has_name(name)
+        print rec
+        if rec != None:
             return True
-        db = DB()
+        new_id = self.search_for_id()
+        db = DB(schema=schema, size=size, id=new_id)
+        self.db.insert(id=new_id, name=name, schema=simplejson.dumps(schema))
+        return db
     def close(self):
         self.db.close()
 
