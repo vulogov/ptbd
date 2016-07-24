@@ -28,6 +28,11 @@ class SchemaError(Exception):
         self.db = db
         self.msg = msg
         self.kw = kw
+class QueryError(Exception):
+    def __init__(self, db, *msg, **kw):
+        self.db = db
+        self.msg = msg
+        self.kw = kw
 
 class RECORD:
     def __init__(self, db, rec):
@@ -40,7 +45,7 @@ class RECORD:
             raise KeyError,key
         try:
             self.db.begin()
-            res = wgdb.get_field(self.db, self.rec, self.db.attrs[key])
+            res = wgdb.get_field(self.db.db, self.rec, self.db.attrs[key])
             self.db.commit()
             return res
         except KeyboardInterrupt:
@@ -50,7 +55,7 @@ class RECORD:
             raise KeyError,key
         try:
             self.db.begin(True)
-            res = wgdb.set_field(self.db, self.rec, self.db.attrs[key], value)
+            res = wgdb.set_field(self.db.db, self.rec, self.db.attrs[key], value)
             self.db.commit()
             return res
         except:
@@ -59,7 +64,7 @@ class RECORD:
         try:
             print "Boo",self.dv.ID()
             self.db.begin(True)
-            wgdb.delete_record(self.db, self.rec)
+            wgdb.delete_record(self.db.db, self.rec)
             self.db.commit()
         except:
             self.db.commit()
@@ -76,7 +81,7 @@ class CURSOR:
         return self
     def next(self):
         if self.rec != None:
-            rec = RECORD(self.db, self.rec)
+            rec = RECORD(self, self.rec)
         else:
             raise StopIteration()
         try:
@@ -95,7 +100,7 @@ class QUERY(CURSOR):
         self.q = q
     def next(self):
         if self.rec != None:
-            rec = RECORD(self.db, self.rec)
+            rec = RECORD(self, self.rec)
         else:
             wgdb.free_qauery(self.db, self.q)
             raise StopIteration()
@@ -103,10 +108,10 @@ class QUERY(CURSOR):
             self.db.begin()
             self.rec = wgdb.fetch(self.db, self.rec)
             self.db.commit()
-        except KeyboardInterrupt:
+        except:
             self.rec = None
             wgdb.free_query(self.db.db, self.q)
-        print "MMM",rec
+            raise StopIteration()
         return rec
 
 
@@ -215,7 +220,6 @@ class DB:
         if not self.ready:
             return False
         self.commit()
-        self.journal()
         try:
             wgdb.detach_database(self.db)
         except:
@@ -274,11 +278,53 @@ class DB:
             self.begin()
             rec = wgdb.fetch(self.db, q)
             self.commit()
-            print 44,rec
             return QUERY(self, rec, q)
         except:
             self.commit()
             return None
+    def mkquery(self, q):
+        res = []
+        for _q in q:
+            _qe = ["", "", ""]
+            if _q[0] not in self.attrs.keys():
+                raise QueryError(self, "Query attribute not in the database", q=_q, query=q)
+            else:
+                _qe[0] = self.attrs[_q[0]]
+            if _q[1] == "=":
+                _qe[1] = wgdb.COND_EQUAL
+            elif _q[1] == "!=":
+                _qe[1] = wgdb.COND_NOT_EQUAL
+            elif _q[1] == "<":
+                _qe[1] = wgdb.COND_LESSTHAN
+            elif _q[1] == ">":
+                _qe[1] = wgdb.COND_GREATER
+            elif _q[1] == "<=":
+                _qe[1] = wgdb.COND_GTEQUAL
+            elif _q[1] == ">=":
+                _qe[1] = wgdb.COND_LTEQUAL
+            else:
+                raise QueryError(self, "Query operator is incorrect", q=_q, query=q)
+            _qe[2] = _q[2]
+            res.append(tuple(_qe))
+        return res
+    def select(self, *qargs):
+        if not self.ready:
+            raise DBError(self, "Database %s not ready" % self.ID())
+        query = self.mkquery(qargs)
+        q = wgdb.make_query(self.db, arglist=query)
+        #print "AAA",q.res_count
+        res = []
+        for r in range(q.res_count):
+            try:
+                self.begin()
+                rec = wgdb.fetch(self.db, q)
+                self.commit()
+                res.append(RECORD(self, rec))
+            except:
+                self.commit()
+                break
+        wgdb.free_query(self.db, q)
+        return res
     def begin(self, _write=False):
         if not self.ready:
             raise DBError(self, "Database %s not ready" % self.ID())
@@ -286,21 +332,25 @@ class DB:
             raise DBError(self, "Read or Write transaction already started in %s" % self.ID())
         stamp = time.time()
         if _write == True:
+            #print "W"
             self.is_write = stamp
-            self.journal_lock = wgdb.start_write(self.db)
+            #self.journal_lock = wgdb.start_write(self.db)
         else:
+            #print "R"
             self.is_read = stamp
-            self.journal_lock = wgdb.start_read(self.db)
+            #self.journal_lock = wgdb.start_read(self.db)
         return stamp
     def commit(self):
         if not self.ready:
             raise DBError(self, "Database %s not ready" % self.ID())
         if self.is_read != 0:
+            #print "CR"
             self.is_read = 0
-            wgdb.end_read(self.db, self.journal_lock)
+            #wgdb.end_read(self.db, self.journal_lock)
         if self.is_write != 0:
+            #print "CW"
             self.is_write = 0
-            wgdb.end_write(self.db, self.journal_lock)
+            #wgdb.end_write(self.db, self.journal_lock)
         self.journal_lock = 0
     def is_journal(self):
         if self.journal_stamp == 0:
@@ -310,11 +360,15 @@ class DB:
         if not self.ready:
             raise DBError(self, "Database %s not ready" % self.ID())
         if self.is_journal() != True:
+            #print "JS"
             self.journal_stamp = time.time()
-            wgdb.start_logging(self.db)
+            if not wgdb.start_logging(self.db):
+                raise DBError(self, "Can not start logging on %s" % self.ID())
         else:
+            #print "JC"
             self.journal_stamp = 0
-            wgdb.stop_logging(self.db)
+            if not wgdb.stop_logging(self.db):
+                raise DBError(self, "Can not stop logging on %s" % self.ID())
     def journals(self):
         return find_files_in_dir(self.tmpdir, "wgdb.journal.%s*"%self.ID())
     def dumps(self):
@@ -348,26 +402,24 @@ class DB:
 class CATALOG:
     def __init__(self, id, size):
         self.db = DB(("id", True, ""),("name", True, ""), ("schema", False, "[]"), id=id, size=size, restore=True)
-        self.db.journal()
+        print self.has_key("test")
     def has_key(self, name):
-        q = self.db.query((1, wgdb.COND_EQUAL, name))
-        if not q:
+        res = self.has_name(name)
+        if len(res) == 0:
             return False
         else:
-            r = q.next()
-            if not r:
-                return False
-        return True
+            return True
     def has_name(self, name):
-        q = self.db.query((1, wgdb.COND_EQUAL, name))
-        print "Q",q
-        if not q:
-            return None
-        else:
-            r = q.next()
-            if not r:
-                return None
-        return r
+        res = self.db.select(("name","=",name))
+        return res
+    def __getitem__(self, key):
+        res = self.has_name(key)
+        if len(res) != 1:
+            raise KeyError, key
+        _db = res[0]
+        print _db["id"]
+        db = DB(id=_db["id"], schema=simplejson.loads(_db["schema"]), name=_db["name"])
+        return db
     def search_for_id(self):
         try:
             c = self.db.first()
@@ -376,13 +428,17 @@ class CATALOG:
         for r in c.next():
             print r
     def add(self, name, size, *schema):
-        rec = self.has_name(name)
-        print rec
-        if rec != None:
-            return True
-        new_id = self.search_for_id()
-        db = DB(schema=schema, size=size, id=new_id)
-        self.db.insert(id=new_id, name=name, schema=simplejson.dumps(schema))
+        print "BBB",name
+        res = self.has_key(name)
+        print "CCC",res
+        if res:
+            db = self[name]
+        else:
+            print "ADD",schema,size
+            new_id = self.search_for_id()
+            db = DB(schema=schema, size=size, id=new_id)
+            print db
+            #self.db.insert(id=new_id, name=name, schema=simplejson.dumps(schema))
         return db
     def close(self):
         self.db.close()
